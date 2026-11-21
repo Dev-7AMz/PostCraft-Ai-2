@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://postcraft-ai-2.7amz777z.workers.dev/sitemap.xml
