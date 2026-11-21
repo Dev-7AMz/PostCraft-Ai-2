@@ -4,8 +4,6 @@ const JSON_HEADERS = {
   "cache-control": "no-store"
 };
 
-const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -19,54 +17,52 @@ function cleanText(value, max = 1800) {
     : "";
 }
 
-function extractOutput(result) {
-  const content =
-    result?.choices?.[0]?.message?.content ??
-    result?.response ??
-    result?.output_text ??
-    result?.generated_text ??
-    "";
+function extractText(result) {
+  const candidates = [
+    result?.response,
+    result?.choices?.[0]?.message?.content,
+    result?.output_text,
+    result?.generated_text
+  ];
 
-  if (typeof content === "string") {
-    return content.trim();
-  }
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
 
-  if (Array.isArray(content)) {
-    return content
-      .map(part =>
-        typeof part === "string" ? part : part?.text || ""
-      )
-      .join("")
-      .trim();
+    if (Array.isArray(value)) {
+      const text = value
+        .map(item => typeof item === "string" ? item : item?.text || "")
+        .join("")
+        .trim();
+
+      if (text) return text;
+    }
   }
 
   return "";
 }
 
+const MODEL = "@cf/zai-org/glm-4.7-flash";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (
-      url.pathname === "/api/health" &&
-      request.method === "GET"
-    ) {
+    if (url.pathname === "/api/health" && request.method === "GET") {
       return json({
         ok: true,
         service: "PostCraft AI",
-        configured: Boolean(env.AI),
+        configured: Boolean(env.AI && typeof env.AI.run === "function"),
         provider: "Cloudflare Workers AI",
-        model: AI_MODEL
+        model: MODEL
       });
     }
 
-    if (
-      url.pathname === "/api/generate" &&
-      request.method === "POST"
-    ) {
+    if (url.pathname === "/api/generate" && request.method === "POST") {
       if (!env.AI || typeof env.AI.run !== "function") {
         return json({
-          error: "خدمة الذكاء الاصطناعي غير مربوطة بعد. أضف Workers AI Binding باسم AI في إعدادات Cloudflare ثم أعد النشر."
+          error: "Workers AI binding باسم AI غير متصل."
         }, 503);
       }
 
@@ -80,9 +76,7 @@ export default {
         }, 400);
       }
 
-      const action =
-        body.action === "hashtags" ? "hashtags" : "post";
-
+      const action = body.action === "hashtags" ? "hashtags" : "post";
       const topic = cleanText(body.topic, 1200);
       const platform = cleanText(body.platform, 80) || "عام";
       const language = body.language === "en" ? "English" : "Arabic";
@@ -99,29 +93,45 @@ export default {
       }
 
       const systemPrompt = action === "hashtags"
-        ? `You are a social media hashtag strategist. Return only useful hashtags for the topic. Avoid explanations, duplicates, and misleading tags. Output in ${language}.`
-        : `You are an expert social media copywriter. Write polished, natural, engaging content. Output in ${language}. Respect the requested platform and tone. Do not invent facts, statistics, testimonials, or guarantees.`;
+        ? `You are an expert social media hashtag strategist.
+Generate relevant hashtags only.
+No explanations or duplicates.
+Use ${language}.`
+        : `You are an expert social media copywriter.
+Write engaging, natural social media content in ${language}.
+Respect the platform, tone, audience and length.
+Do not invent facts or statistics.
+Return the finished post directly.`;
 
       const userPrompt = action === "hashtags"
-        ? `Suggest 12-18 relevant hashtags for this topic.
+        ? `Generate 12-18 relevant hashtags.
+
 Topic: ${topic}
 Platform: ${platform}
 Audience: ${audience || "General"}
 Keywords: ${keywords || "None"}
-Return hashtags only, separated by spaces.`
+
+Return hashtags only.`
         : `Create one ready-to-publish social media post.
-Topic/brief: ${topic}
+
+Topic: ${topic}
 Platform: ${platform}
 Language: ${language}
 Tone: ${tone}
 Length: ${length}
-Target audience: ${audience || "General"}
-Keywords to include naturally: ${keywords || "None"}
-Call to action: ${callToAction || "Use a suitable natural call to action"}
-Requirements: Start with an engaging opening, use readable short paragraphs, keep emojis tasteful and relevant, and do not add a heading such as "Here is your post". Include 3-6 relevant hashtags at the end.`;
+Audience: ${audience || "General"}
+Keywords: ${keywords || "None"}
+Call to action: ${callToAction || "Use a suitable call to action"}
+
+Requirements:
+- Start with an engaging opening.
+- Use readable paragraphs.
+- Use suitable emojis.
+- Do not add an introductory explanation.
+- Include 3-6 relevant hashtags at the end.`;
 
       try {
-        const result = await env.AI.run(AI_MODEL, {
+        const result = await env.AI.run(MODEL, {
           messages: [
             {
               role: "system",
@@ -132,15 +142,24 @@ Requirements: Start with an engaging opening, use readable short paragraphs, kee
               content: userPrompt
             }
           ],
-          temperature: 0.8,
-          max_tokens: action === "hashtags" ? 220 : 850
+          max_tokens: action === "hashtags" ? 300 : 1000,
+          temperature: 0.7,
+          chat_template_kwargs: {
+            enable_thinking: false,
+            clear_thinking: true
+          }
         });
 
-        const output = extractOutput(result);
+        const output = extractText(result);
 
         if (!output) {
+          console.error(
+            "Empty AI response:",
+            JSON.stringify(result).slice(0, 3000)
+          );
+
           return json({
-            error: "وصل رد فارغ من نموذج الذكاء الاصطناعي. حاول مرة أخرى."
+            error: "لم يُرجع النموذج نصاً. حاول مرة أخرى."
           }, 502);
         }
 
@@ -150,23 +169,18 @@ Requirements: Start with an engaging opening, use readable short paragraphs, kee
         });
 
       } catch (error) {
-        const details = String(error?.message || "");
-        const lower = details.toLowerCase();
+        console.error("Workers AI error:", error);
 
-        if (
-          lower.includes("limit") ||
-          lower.includes("quota") ||
-          lower.includes("billing") ||
-          lower.includes("neurons") ||
-          lower.includes("rate")
-        ) {
+        const message = String(error?.message || error || "");
+
+        if (/limit|quota|rate|429|neuron/i.test(message)) {
           return json({
-            error: "تم الوصول إلى حد الاستخدام المتاح حالياً في Cloudflare AI. انتظر حتى يتجدد الحد ثم حاول مجدداً."
+            error: "تم بلوغ حد الاستخدام المتاح حالياً. حاول لاحقاً."
           }, 429);
         }
 
         return json({
-          error: "تعذر تشغيل نموذج الذكاء الاصطناعي في Cloudflare. تأكد من تفعيل Workers AI Binding باسم AI وأن النموذج متاح لحسابك."
+          error: "تعذر تشغيل النموذج: " + message.slice(0, 250)
         }, 502);
       }
     }
@@ -177,12 +191,7 @@ Requirements: Start with an engaging opening, use readable short paragraphs, kee
       }, 404);
     }
 
-    if (!env.ASSETS || typeof env.ASSETS.fetch !== "function") {
-      return json({
-        error: "إعدادات ملفات الموقع الثابتة غير مكتملة."
-      }, 500);
-    }
-
     return env.ASSETS.fetch(request);
   }
 };
+          
