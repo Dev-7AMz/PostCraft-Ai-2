@@ -17,32 +17,42 @@ function cleanText(value, max = 1800) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
-function extractText(result) {
-  const content =
-    result?.choices?.[0]?.message?.content ??
-    result?.response ??
-    result?.output_text ??
-    result?.generated_text ??
-    result?.result?.response ??
-    "";
-
-  if (typeof content === "string") return content.trim();
-
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if (typeof part?.text === "string") return part.text;
-        if (typeof part?.content === "string") return part.content;
-        return "";
-      })
-      .join("\n")
-      .trim();
+function textFromContent(value) {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value.map((part) => {
+      if (typeof part === "string") return part;
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.content === "string") return part.content;
+      return "";
+    }).filter(Boolean).join("\\n").trim();
   }
+  if (value && typeof value === "object") {
+    if (typeof value.text === "string" && value.text.trim()) return value.text.trim();
+    if (typeof value.content === "string" && value.content.trim()) return value.content.trim();
+    if (Array.isArray(value.content)) return textFromContent(value.content);
+    if (typeof value.response === "string" && value.response.trim()) return value.response.trim();
+  }
+  return "";
+}
 
-  if (content && typeof content === "object") {
-    if (typeof content.text === "string") return content.text.trim();
-    if (typeof content.content === "string") return content.content.trim();
+function extractText(result) {
+  // Some model responses expose an empty `content` field alongside a populated
+  // `response` field. Do not use nullish-coalescing here: an empty string is not null.
+  const candidates = [
+    result?.choices?.[0]?.message?.content,
+    result?.response,
+    result?.output_text,
+    result?.generated_text,
+    result?.result?.response,
+    result?.result?.choices?.[0]?.message?.content,
+    result?.message?.content,
+    result?.content
+  ];
+
+  for (const candidate of candidates) {
+    const text = textFromContent(candidate);
+    if (text) return text;
   }
 
   return "";
