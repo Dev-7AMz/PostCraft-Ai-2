@@ -70,6 +70,21 @@ function parseModelJson(raw) {
   }
 }
 
+function recoverModelJson(raw) {
+  const recovered = {};
+  const postMatch = raw.match(/"post"\s*:\s*"((?:\\.|[^"\\])*)"/s);
+  if (postMatch) {
+    try { recovered.post = JSON.parse(`"${postMatch[1]}"`); } catch { /* ignore malformed field */ }
+  }
+  const tagMatch = raw.match(/"hashtags"\s*:\s*\[([\s\S]*?)(?:\]|$)/);
+  if (tagMatch) {
+    recovered.hashtags = [...tagMatch[1].matchAll(/"((?:\\.|[^"\\])*)"/g)].map((match) => {
+      try { return JSON.parse(`"${match[1]}"`); } catch { return ""; }
+    }).filter(Boolean);
+  }
+  return Object.keys(recovered).length ? recovered : null;
+}
+
 function normalizeHashtags(value) {
   const source = Array.isArray(value)
     ? value
@@ -279,7 +294,7 @@ export default {
           return json({ error: "وصل رد فارغ من نموذج الذكاء الاصطناعي. حاول مرة أخرى." }, 502);
         }
 
-        const parsed = parseModelJson(raw);
+        const parsed = parseModelJson(raw) || recoverModelJson(raw);
 
         if (action === "hashtags") {
           const hashtags = normalizeHashtags(parsed?.hashtags ?? fallbackHashtags(raw));
@@ -290,7 +305,7 @@ export default {
         }
 
         const post = cleanText(parsed?.post, 7000) ||
-          raw.replace(/#[\p{L}\p{N}_]+/gu, "").trim();
+          (parsed ? "" : raw.replace(/#[\p{L}\p{N}_]+/gu, "").trim());
         const hashtags = normalizeHashtags(parsed?.hashtags ?? fallbackHashtags(raw));
 
         if (!post) {
