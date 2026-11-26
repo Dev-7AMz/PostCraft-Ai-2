@@ -4,7 +4,7 @@ const JSON_HEADERS = {
 };
 
 const MODEL = "@cf/zai-org/glm-4.7-flash";
-const MAX_BODY_SIZE = 12000;
+const MAX_BODY_SIZE = 36000;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -25,7 +25,7 @@ function textFromContent(value) {
       if (typeof part?.text === "string") return part.text;
       if (typeof part?.content === "string") return part.content;
       return "";
-    }).filter(Boolean).join("\\n").trim();
+    }).filter(Boolean).join("\n").trim();
   }
   if (value && typeof value === "object") {
     if (typeof value.text === "string" && value.text.trim()) return value.text.trim();
@@ -37,10 +37,13 @@ function textFromContent(value) {
 }
 
 function extractText(result) {
-  // Some model responses expose an empty `content` field alongside a populated
-  // `response` field. Do not use nullish-coalescing here: an empty string is not null.
+  // Workers AI chat models normally return choices[0].message.content.
+  // Keep fallbacks for other response envelopes, but skip empty candidates.
+  if (typeof result === "string" && result.trim()) return result.trim();
+
   const candidates = [
     result?.choices?.[0]?.message?.content,
+    result?.choices?.[0]?.text,
     result?.response,
     result?.output_text,
     result?.generated_text,
